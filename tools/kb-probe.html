@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识库探测页</title>
+  <style>
+    :root { --ink: #1c1917; --muted: #6b6560; --line: #e7e5e4; --soft: #fafaf9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink); background: var(--soft); }
+    main { max-width: 900px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 12px; }
+    h1 { font-size: 20px; margin: 0; }
+    .muted { color: var(--muted); font-size: 13px; margin: 0; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    input, button, textarea { font: inherit; }
+    input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    #key, #q { flex: 1; min-width: 200px; }
+    #k { width: 70px; }
+    button { padding: 8px 14px; border: 0; border-radius: 8px; background: var(--ink); color: #fff; cursor: pointer; }
+    button.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    button:disabled { opacity: .5; }
+    .ok { color: #166534; } .bad { color: #991b1b; }
+    .box { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .err { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+    td.txt { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 240px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f5f5f4; border-radius: 8px; padding: 10px; font-size: 12px; margin: 0; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>知识库探测页（只给开发小组用，不要上传成正式机器人）</h1>
+    <p class="muted">它只调用 /kb/v1/search，看知识库实际返回了什么：有没有资料、来源名（source）叫什么、是不是整条、分数多少。不调用模型，不花模型预算。</p>
+
+    <section class="card" id="key-panel">
+      <form id="key-form" class="row" autocomplete="off">
+        <input id="key" type="password" placeholder="粘贴你的 tp-live-… 密钥" aria-label="TokenProxy 密钥" spellcheck="false">
+        <button type="submit">使用密钥</button>
+      </form>
+      <p class="muted" id="key-status">密钥只放在这个页面的内存里，关掉就没了；只发送到 db.aidcec-ai-agent.com。</p>
+    </section>
+
+    <section class="card">
+      <form id="ask" class="row">
+        <input id="q" aria-label="检索词" placeholder="输入检索词" value="彩礼">
+        <label class="muted">k <input id="k" type="number" min="1" max="20" value="10" aria-label="返回条数"></label>
+        <button id="go">检索</button>
+      </form>
+      <div class="row" id="presets" aria-label="建议的探测检索词"></div>
+    </section>
+
+    <div id="summary" class="box" hidden></div>
+    <div id="result" class="box table-wrap" hidden></div>
+    <details class="box" id="raw-box" hidden><summary>原始返回（JSON）</summary><pre id="raw"></pre></details>
+  </main>
+
+  <script>
+    // 机器人 index.html 里 SETTINGS.sources 的暂定来源名；用来对比“对不对得上”
+    const REGISTERED = ["minfadian-hunyin.txt", "hunyin-jieshi-1.txt", "hunyin-jieshi-2.txt", "caili-guiding.txt",
+      "fanjiabao-fa.txt", "baohuling-guiding.txt", "cases-spc.txt", "cases-local.txt",
+      "test-law-jia.txt", "test-interp-yi.txt", "test-cases-bing.txt", "test-all-in-one.txt"];   // 正式版和测试版登记表里预填的文件名
+    const PRESETS = ["彩礼", "第一千零七十七条", "离婚时共同财产怎么分", "人身安全保护令", "案例 裁判要旨", "今天天气怎么样"];
+    const HOSTED = /^project-(cmi|emi|demo)-\d{2}\.aidcec-ai-agent\.com$/i.test(location.hostname);
+    const KB_BASE = "https://db.aidcec-ai-agent.com";
+    const $ = (id) => document.getElementById(id);
+    let apiKey = "";
+
+    function el(tag, text, cls) { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
+
+    function friendly(status) {
+      if (status === 401) return "401：密钥不被接受（检查是否复制完整、是否是本组的密钥）。";
+      if (status === 402) return "402：预算已用完。";
+      if (status === 403) return "403：这把密钥不能用知识库检索。";
+      if (status === 404) return "404：接口地址不对，或你的账号还没有知识库。";
+      if (status === 429) return "429：请求太频繁，等几秒再试。";
+      if (status >= 500) return status + "：服务暂时忙，稍后再试。";
+      return "出错了（" + status + "）。";
+    }
+
+    async function search(query, k) {
+      const headers = { "content-type": "application/json" };
+      if (!HOSTED) headers.authorization = "Bearer " + apiKey;
+      const res = await fetch((HOSTED ? "" : KB_BASE) + "/kb/v1/search", { method: "POST", headers, body: JSON.stringify({ query, k }) });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) { const e = new Error("http"); e.status = res.status; e.body = body; throw e; }
+      return body;
+    }
+
+    function render(query, data) {
+      const chunks = (data && data.chunks) || [];
+      const summary = $("summary"), result = $("result");
+      summary.replaceChildren(); result.replaceChildren();
+      summary.className = "box"; summary.hidden = false; result.hidden = !chunks.length;
+      $("raw").textContent = JSON.stringify(data, null, 2); $("raw-box").hidden = false;
+
+      summary.append(el("div", "检索词：“" + query + "”，返回 " + chunks.length + " 段。"));
+      if (!chunks.length) {
+        summary.append(el("div", "知识库没有返回任何内容。最可能是：资料还没上传，或者上传到了别的组 / 别的账号的知识库，或者这把密钥对应的不是你们组。", "bad"));
+        return;
+      }
+      const LEGAL = /(^|\n)\s*(【文件[:：][^】]*】)?\s*第[零〇一二三四五六七八九十百千\d]+条|【案例\s*[A-Za-z]+-\d+】/;
+      const groups = new Map();
+      chunks.forEach((c) => {
+        const g = groups.get(c.source) || { n: 0, labels: new Set(), legal: false };
+        g.n++; if (c.label) g.labels.add(c.label); if (LEGAL.test(c.content || "")) g.legal = true;
+        groups.set(c.source, g);
+      });
+      summary.append(el("div", "出现的来源（source ｜ label）："));
+      const ul = el("ul");
+      const toCopy = [];
+      groups.forEach((g, s) => {
+        const labels = [...g.labels].join("、") || "（无 label）";
+        const ok = REGISTERED.includes(s) || [...g.labels].some((l) => REGISTERED.includes(l));
+        let note, cls;
+        if (ok) { note = "　✔ 能和登记表对上（按 source 或 label）"; cls = "ok"; }
+        else if (g.legal) { note = "　✘ 像是法条或案例，但登记表里没有这个名字，机器人会把它丢掉"; cls = "bad"; toCopy.push([s, labels]); }
+        else { note = "　⚠ 内容不像法条或案例（可能是演示资料或无关文件）。不要登记，机器人会自动忽略它"; cls = "muted"; }
+        ul.append(el("li", JSON.stringify(s) + " ｜ " + labels + " × " + g.n + note, cls));
+      });
+      summary.append(ul);
+      if (toCopy.length) {
+        summary.append(el("div", "把下面的 source 照抄到 index.html 的 SETTINGS.sources 里对应文件那一行（看 label 判断是哪份文件）："));
+        summary.append(el("pre", toCopy.map(([s, l]) => "source: " + JSON.stringify(s) + ",   // label：" + l).join("\n")));
+      } else if (![...groups.values()].some((g) => g.legal)) {
+        summary.append(el("div", "这次返回的内容里没有一段像法条或案例：知识库里很可能还没有你们的婚姻法资料。请先上传整理好的 .txt 文件，再来探测。", "bad"));
+      }
+      const scores = chunks.map((c) => c.score).filter((s) => typeof s === "number");
+      if (scores.length) summary.append(el("div", "分数范围：" + Math.min(...scores).toFixed(3) + " ～ " + Math.max(...scores).toFixed(3) + "（多试几个相关、无关的问题，比较后再定 minScore）"));
+      const noArt = chunks.filter((c) => !/(^|\n)\s*(【文件[:：][^】]*】)?\s*第[零〇一二三四五六七八九十百千\d]+条/.test(c.content || "") && !/【案例\s*[A-Za-z]+-\d+】/.test(c.content || "")).length;
+      if (noArt) summary.append(el("div", noArt + " 段开头既没有“第X条”也没有“【案例 编号】”：可能被切开了，或文件格式不对（见 skill 第 5.3 节）。", "bad"));
+
+      const table = el("table");
+      const head = el("tr"); ["#", "source", "label / heading_path", "score", "content（前 200 字）"].forEach((h) => head.append(el("th", h)));
+      table.append(head);
+      chunks.forEach((c, i) => {
+        const tr = el("tr");
+        tr.append(el("td", String(i + 1)), el("td", c.source ?? "（无）"), el("td", [c.label, c.heading_path].filter(Boolean).join(" ｜ ") || "（无）"),
+          el("td", c.score == null ? "（无）" : String(c.score)), el("td", String(c.content || "").slice(0, 200), "txt"));
+        table.append(tr);
+      });
+      result.append(table);
+    }
+
+    PRESETS.forEach((p) => {
+      const b = el("button", p, "secondary"); b.type = "button";
+      b.addEventListener("click", () => { $("q").value = p; $("ask").requestSubmit(); });
+      $("presets").append(b);
+    });
+    if (HOSTED) $("key-panel").hidden = true;
+    $("key-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const v = $("key").value.trim();
+      if (!v.startsWith("tp-live-")) { $("key-status").textContent = "课堂密钥以 tp-live- 开头。"; return; }
+      apiKey = v; $("key").value = ""; $("key").placeholder = "密钥已设置"; $("key-status").textContent = "密钥已设置（只在内存里）。";
+    });
+    $("ask").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const q = $("q").value.trim(); const k = Math.min(20, Math.max(1, parseInt($("k").value, 10) || 10));
+      if (!q) return;
+      if (!HOSTED && !apiKey) { $("key-status").textContent = "请先粘贴密钥并按“使用密钥”。"; return; }
+      $("go").disabled = true;
+      try { render(q, await search(q, k)); }
+      catch (err) {
+        const s = $("summary"); s.hidden = false; s.className = "box err"; $("result").hidden = true;
+        s.textContent = err.status ? friendly(err.status) : "连不上 db.aidcec-ai-agent.com，请检查网络。";
+        if (err.body) { $("raw").textContent = JSON.stringify(err.body, null, 2); $("raw-box").hidden = false; }
+      } finally { $("go").disabled = false; }
+    });
+  </script>
+</body>
+</html>

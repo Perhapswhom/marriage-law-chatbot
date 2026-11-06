@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识库文件整理器</title>
+  <style>
+    :root { --ink: #1c1917; --muted: #6b6560; --line: #e7e5e4; --soft: #fafaf9; --ok: #166534; --bad: #991b1b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink); background: var(--soft); }
+    main { max-width: 900px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 12px; }
+    h1 { font-size: 20px; margin: 0; }
+    .muted { color: var(--muted); font-size: 13px; margin: 0; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    select, button, textarea, input { font: inherit; }
+    select { max-width: 100%; }
+    li, a { overflow-wrap: anywhere; }
+    select, input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    textarea { width: 100%; min-height: 180px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; line-height: 1.6; resize: vertical; }
+    button { padding: 8px 14px; border: 0; border-radius: 8px; background: var(--ink); color: #fff; cursor: pointer; }
+    button.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    ol { margin: 0; padding-left: 20px; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); }
+    #report { white-space: pre-wrap; }
+    a { color: #1d4ed8; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>知识库文件整理器（法律、司法解释）</h1>
+    <p class="muted">在官方网站复制原文，粘贴到这里，自动整理成“每条一行、以‘第X条’开头”的知识库格式，并检查条文是否齐全。整理只调整换行和空格，不改任何字；所有处理都在你的浏览器里完成，不联网。</p>
+
+    <section class="card">
+      <div class="row">
+        <label for="doc"><b>① 选择文件</b></label>
+        <select id="doc"></select>
+      </div>
+      <ol class="muted" id="howto"></ol>
+    </section>
+
+    <section class="card">
+      <label for="input"><b>② 粘贴从官网复制的全文</b>（公告、标题、页脚一起粘也没关系）</label>
+      <textarea id="input" placeholder="在这里粘贴官方原文"></textarea>
+      <div class="row">
+        <label class="muted"><input type="checkbox" id="drop-head" checked> 删掉第一条之前的公告文字（保留下面的标题行）</label>
+        <button id="run" type="button">整理并检查</button>
+      </div>
+    </section>
+
+    <section class="card" id="result" hidden>
+      <b>③ 检查结果</b>
+      <div id="report"></div>
+      <label for="output"><b>④ 整理好的文件内容</b>（可以直接在这里改；改完再按一次“重新检查”）</label>
+      <textarea id="output" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="recheck" type="button" class="secondary">重新检查</button>
+        <button id="copy" type="button" class="secondary">复制内容</button>
+        <button id="download" type="button">下载 .txt 文件</button>
+        <span class="muted" id="copy-status"></span>
+      </div>
+      <p class="muted">下载的文件名就是 skill 第 5.3 节约定的名字。上传到组知识库后，用探测页或测试版的调试信息查出它的 src_ 编号，填进 index.html 登记表对应那一行的 source。</p>
+    </section>
+  </main>
+
+  <script>
+    // 文件清单：文号、条数已对照官方来源核对（2026-11）；官方链接用于打开原文页面复制
+    const DOCS = [
+      { file: "caili-guiding.txt", title: "最高人民法院关于审理涉彩礼纠纷案件适用法律若干问题的规定（法释〔2024〕1号，2024年2月1日起施行）",
+        low: 1, high: 7, url: "https://www.court.gov.cn/fabu/xiangqing/423442.html", where: "最高人民法院官网" },
+      { file: "hunyin-jieshi-1.txt", title: "最高人民法院关于适用《中华人民共和国民法典》婚姻家庭编的解释（一）（法释〔2020〕22号，2021年1月1日起施行）",
+        low: 1, high: 91, url: "https://www.court.gov.cn/fabu/xiangqing/282071.html", where: "最高人民法院官网" },
+      { file: "hunyin-jieshi-2.txt", title: "最高人民法院关于适用《中华人民共和国民法典》婚姻家庭编的解释（二）（法释〔2025〕1号，2025年2月1日起施行）",
+        low: 1, high: 23, url: "https://www.court.gov.cn/zixun/xiangqing/452771.html", where: "最高人民法院官网" },
+      { file: "baohuling-guiding.txt", title: "最高人民法院关于办理人身安全保护令案件适用法律若干问题的规定（法释〔2022〕17号，2022年8月1日起施行）",
+        low: 1, high: 13, url: "https://www.court.gov.cn/fabu/xiangqing/366021.html", where: "最高人民法院官网" },
+      { file: "fanjiabao-fa.txt", title: "中华人民共和国反家庭暴力法（2016年3月1日起施行）",
+        low: 1, high: 38, url: "https://flk.npc.gov.cn/", where: "国家法律法规数据库（在站内搜索“反家庭暴力法”）" },
+      { file: "minfadian-hunyin.txt", title: "中华人民共和国民法典 第五编 婚姻家庭（2021年1月1日起施行）",
+        low: 1040, high: 1118, url: "https://flk.npc.gov.cn/", where: "国家法律法规数据库（搜索“民法典”，只复制第五编：从“第五编 婚姻家庭”到第一千一百一十八条）" },
+    ];
+    const $ = (id) => document.getElementById(id);
+    const NUM = "零〇一二三四五六七八九十百千";
+    function cn2int(t) {
+      const d = { 零: 0, 〇: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }, u = { 十: 10, 百: 100, 千: 1000 };
+      let total = 0, cur = 0;
+      for (const ch of t) { if (ch in d) cur = d[ch]; else if (ch in u) { total += (cur || 1) * u[ch]; cur = 0; } }
+      return total + cur;
+    }
+    function int2cn(n) {
+      const d = "零一二三四五六七八九", u = ["千", "百", "十", ""];
+      const p = [Math.floor(n / 1000) % 10, Math.floor(n / 100) % 10, Math.floor(n / 10) % 10, n % 10];
+      let s = "", zero = false;
+      p.forEach((v, i) => { if (v === 0) { if (s) zero = true; return; } if (zero) { s += "零"; zero = false; } s += (v === 1 && i === 2 && !s ? "" : d[v]) + u[i]; });
+      return s;
+    }
+    const ART_START = new RegExp("^第([" + NUM + "]+)条");
+    const HEADING = new RegExp("^第[" + NUM + "]+[编章节]\\s");
+    const NOISE = /责任编辑|编辑：|来源：|分享到|【打印】|【关闭】|打印本页|关闭窗口|版权所有|Copyright|ICP备|主办单位|网站地图|扫一扫/;
+
+    function format(raw, doc, dropHead) {
+      const notes = [];
+      let text = raw.replace(/\r\n?/g, "\n").replace(/[    ]/g, " ").replace(/[ \t]+\n/g, "\n");
+      // 有些页面复制下来几条挤在一行：只在“下一个应该出现的条号”前面断行，正文里引用别的条号不受影响
+      let lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      const out = [];
+      let expect = doc.low, splits = 0, inArticle = false;
+      for (let line of lines) {
+        for (;;) {
+          const next = "第" + int2cn(expect + 1) + "条";
+          const at = line.indexOf(next);
+          // 只有“前面是一条完整条文、以句号等结尾”时才断开
+          if (at > 0 && /[。；：\s]$/.test(line.slice(0, at)) && (inArticle || ART_START.test(line))) {
+            out.push(line.slice(0, at).trim()); line = line.slice(at).trim(); expect++; splits++; continue;
+          }
+          break;
+        }
+        const m = line.match(ART_START);
+        if (m) { expect = cn2int(m[1]); inArticle = true; }
+        out.push(line);
+      }
+      if (splits) notes.push("有 " + splits + " 处几条挤在一行，已在条号前断开。");
+      // 条号后统一用全角空格
+      let fixedSpace = 0;
+      const normalized = out.map((l) => {
+        const m = l.match(new RegExp("^(第[" + NUM + "]+条)[ \\u3000]*"));
+        if (!m) return l;
+        const fixed = m[1] + "　" + l.slice(m[0].length);
+        if (fixed !== l) fixedSpace++;
+        return fixed;
+      });
+      if (fixedSpace) notes.push("有 " + fixedSpace + " 条的条号后面补成了全角空格。");
+      // 去掉第一条之前的公告；去掉最后一条之后的网页杂项
+      let first = normalized.findIndex((l) => ART_START.test(l));
+      const headingIdx = normalized.findIndex((l, i) => i < first && HEADING.test(l));
+      let body = normalized;
+      if (dropHead && first > 0) {
+        const keepFrom = headingIdx >= 0 ? headingIdx : first;
+        if (keepFrom > 0) notes.push("删掉了第一条之前的 " + keepFrom + " 行（公告、标题等）：\n    " + normalized.slice(0, keepFrom).join("\n    ").slice(0, 300));
+        body = normalized.slice(keepFrom);
+      }
+      const noiseAt = body.findIndex((l) => NOISE.test(l) && !ART_START.test(l));
+      if (noiseAt >= 0) { notes.push("删掉了末尾的网页杂项 " + (body.length - noiseAt) + " 行（从“" + body[noiseAt].slice(0, 20) + "”开始）。请确认没有删到正文。"); body = body.slice(0, noiseAt); }
+      return { text: doc.title + "\n\n" + body.join("\n") + "\n", notes };
+    }
+
+    function check(text, doc) {
+      const nums = [...text.matchAll(new RegExp("(?:^|\\n)第([" + NUM + "]+)条", "g"))].map((m) => cn2int(m[1]));
+      const want = doc.high - doc.low + 1;
+      const set = new Set(nums);
+      const missing = []; for (let n = doc.low; n <= doc.high; n++) if (!set.has(n)) missing.push(n);
+      const dup = [...new Set(nums.filter((n, i) => nums.indexOf(n) !== i))];
+      const extra = [...new Set(nums.filter((n) => n < doc.low || n > doc.high))];
+      const ordered = nums.every((n, i) => i === 0 || n > nums[i - 1]);
+      const ok = !missing.length && !dup.length && !extra.length && ordered && nums.length === want;
+      const show = (a) => (a.length ? a.map((n) => "第" + int2cn(n) + "条").join("、") : "无");
+      return { ok, text: "找到条数：" + nums.length + "（应为 " + want + "）\n缺少：" + show(missing) + "\n重复：" + show(dup) + "\n范围之外：" + show(extra) + "\n顺序递增：" + (ordered ? "是" : "否") };
+    }
+
+    function current() { return DOCS[+$("doc").value]; }
+    function report(notes) {
+      const r = check($("output").value, current());
+      const box = $("report"); box.replaceChildren();
+      const head = document.createElement("div");
+      head.className = r.ok ? "ok" : "bad";
+      head.textContent = r.ok ? "✔ 通过：条文齐全、没有重复、顺序正确。上传前请再抽查几条，和官网原文逐字对一下。" : "✘ 不通过：请对照官网原文检查下面列出的问题，在④里改好后按“重新检查”。";
+      const detail = document.createElement("div"); detail.textContent = r.text;
+      box.append(head, detail);
+      if (notes && notes.length) { const n = document.createElement("div"); n.className = "muted"; n.textContent = "整理时做了这些调整：\n· " + notes.join("\n· "); box.append(n); }
+    }
+
+    DOCS.forEach((d, i) => { const o = document.createElement("option"); o.value = i; o.textContent = d.file + "（第" + int2cn(d.low) + "条至第" + int2cn(d.high) + "条）"; $("doc").append(o); });
+    function showHowto() {
+      const d = current(), ol = $("howto"); ol.replaceChildren();
+      const li1 = document.createElement("li"); li1.append("打开官方原文页面（" + d.where + "）：");
+      const a = document.createElement("a"); a.href = d.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = d.url; li1.append(a);
+      const li2 = document.createElement("li"); li2.textContent = "用鼠标从标题选到最后一条（第" + int2cn(d.high) + "条）结束，复制（Ctrl/⌘ + C）。不要用翻译、阅读模式或第三方转载页。";
+      const li3 = document.createElement("li"); li3.textContent = "粘贴到下面，按“整理并检查”。";
+      ol.append(li1, li2, li3);
+    }
+    $("doc").addEventListener("change", showHowto); showHowto();
+    $("run").addEventListener("click", () => {
+      if (!$("input").value.trim()) return;
+      const f = format($("input").value, current(), $("drop-head").checked);
+      $("output").value = f.text; $("result").hidden = false; report(f.notes);
+    });
+    $("recheck").addEventListener("click", () => report([]));
+    $("copy").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText($("output").value); $("copy-status").textContent = "已复制。"; }
+      catch { $("output").select(); $("copy-status").textContent = "浏览器不让自动复制，已帮你选中，请按 Ctrl/⌘ + C。"; }
+    });
+    $("download").addEventListener("click", () => {
+      const blob = new Blob([$("output").value], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = current().file;
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+  </script>
+</body>
+</html>
